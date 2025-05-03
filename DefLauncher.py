@@ -1,21 +1,34 @@
 import os
-import platform
+import platform as std_platform
 import sys
 import subprocess
-import json
+import orjson
 import time
 import webbrowser
 import pygame
 import requests
+import zipfile
+import shutil
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject, QSize, QTranslator, QTimer
 from PyQt5.QtGui import QPixmap, QFont, QIcon
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QPushButton, QMessageBox, QLineEdit,
     QFileDialog, QInputDialog, QDialog, QTableWidgetItem, QTableWidget, QGroupBox, QFormLayout, QProgressDialog,
-    QSplashScreen
+    QSplashScreen, QCheckBox, QRadioButton, QButtonGroup, QOpenGLWidget
 )
 import minecraft_launcher_lib
 from PIL import Image
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
+from pathlib import Path
+import orjson
+from PIL import Image, ImageTk
+import minecraft_launcher_lib.fabric
+import minecraft_launcher_lib.microsoft_account
+import minecraft_launcher_lib.exceptions
+from OpenGL import GL
+from OpenGL.GLU import *
+import numpy as np
 
 minecraft_directory = minecraft_launcher_lib.utils.get_minecraft_directory().replace("minecraft", "deflauncher")
 mods_directory = os.path.join(minecraft_directory, "mods")
@@ -34,7 +47,7 @@ except requests.ConnectionError:
     internet = False
     print("The internet connection is down")
 
-system = platform.system()
+system = std_platform.system()
 
 if system == "Windows":
     print("You are running on Windows.")
@@ -140,14 +153,178 @@ if internet == True:
                     img.paste((159, 75, 64, 255), area)
                 img.save(skin_path)
 
+        def edit_skin(self, profile_name, skin_type="slim"):
+            try:
+                # Get the version directory
+                version_dir = os.path.join(self.minecraft_dir, "versions", self.version)
+                if not os.path.exists(version_dir):
+                    self.error.emit("Minecraft version not found")
+                    return
+
+                # Get the jar file
+                jar_file = os.path.join(version_dir, f"{self.version}.jar")
+                if not os.path.exists(jar_file):
+                    self.error.emit("Minecraft jar file not found")
+                    return
+
+                # Create a temporary directory for extraction
+                temp_dir = os.path.join(self.minecraft_dir, "temp_skin_edit")
+                os.makedirs(temp_dir, exist_ok=True)
+
+                # Extract the jar file
+                with zipfile.ZipFile(jar_file, 'r') as jar:
+                    jar.extractall(temp_dir)
+
+                # List of skins to replace
+                skins_to_replace = ["alex", "ari", "efe", "kai", "makena", "noor", "steve", "sunny", "zury"]
+                replaced_count = 0
+
+                # Ask user to select a skin file
+                skin_file, _ = QFileDialog.getOpenFileName(
+                    self.main_window,
+                    "Select Skin File",
+                    "",
+                    "PNG Files (*.png)"
+                )
+                
+                if not skin_file:
+                    self.error.emit("No skin file selected")
+                    return
+
+                # Show preview and get skin type
+                preview_dialog = SkinPreviewDialog(self.main_window)
+                preview_dialog.set_preview(skin_file)
+                
+                if preview_dialog.exec_() != QDialog.Accepted:
+                    self.error.emit("Skin selection cancelled")
+                    return
+                    
+                selected_type = preview_dialog.get_skin_type()
+
+                # Path to the skins directory
+                skins_dir = os.path.join(temp_dir, "assets", "minecraft", "textures", "entity", "player", selected_type)
+                if not os.path.exists(skins_dir):
+                    self.error.emit(f"Skins directory not found for type: {selected_type}")
+                    return
+
+                # Replace each skin
+                for skin_name in skins_to_replace:
+                    target_path = os.path.join(skins_dir, f"{skin_name}.png")
+                    if os.path.exists(target_path):
+                        shutil.copy2(skin_file, target_path)
+                        replaced_count += 1
+
+                if replaced_count == 0:
+                    self.error.emit("No matching skin files found to replace")
+                    return
+
+                # Repack the jar file
+                with zipfile.ZipFile(jar_file, 'w') as jar:
+                    for root, _, files in os.walk(temp_dir):
+                        for file in files:
+                            file_path = os.path.join(root, file)
+                            arcname = os.path.relpath(file_path, temp_dir)
+                            jar.write(file_path, arcname)
+
+                self.finished.emit(f"Successfully replaced {replaced_count} skins in {selected_type} directory")
+
+            except Exception as e:
+                self.error.emit(f"Failed to edit skins: {e}")
+            finally:
+                # Clean up
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+
+    class JavaInstaller(QThread):
+        progress = pyqtSignal(int)
+        finished = pyqtSignal(bool)
+        error = pyqtSignal(str)
+
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.parent = parent
+            self.java_url = None
+            self.install_location = None
+            self.add_to_path = False
+            self.create_shortcut = False
+
+        def set_installation_options(self, java_url, install_location, add_to_path, create_shortcut):
+            self.java_url = java_url
+            self.install_location = install_location
+            self.add_to_path = add_to_path
+            self.create_shortcut = create_shortcut
+
+        def run(self):
+            try:
+                # Create installation directory
+                os.makedirs(self.install_location, exist_ok=True)
+                
+                # Download Java installer
+                installer_path = os.path.join(self.install_location, "java_installer.exe")
+                
+                response = requests.get(self.java_url, stream=True)
+                total_size = int(response.headers.get('content-length', 0))
+                block_size = 1024
+                downloaded = 0
+                
+                with open(installer_path, 'wb') as f:
+                    for data in response.iter_content(block_size):
+                        downloaded += len(data)
+                        f.write(data)
+                        progress = int((downloaded / total_size) * 50)  # First 50% for download
+                        self.progress.emit(progress)
+                
+                # Run Java installer with custom location
+                install_args = [
+                    installer_path,
+                    '/s',
+                    f'INSTALLDIR="{self.install_location}"',
+                    'AUTO_UPDATE=0'
+                ]
+                
+                if self.add_to_path:
+                    install_args.append('ADDLOCAL=FeatureMain,FeatureEnvironment')
+                else:
+                    install_args.append('ADDLOCAL=FeatureMain')
+                
+                subprocess.run(install_args, check=True)
+                self.progress.emit(75)
+                
+                # Create desktop shortcut if requested
+                if self.create_shortcut:
+                    java_exe = os.path.join(self.install_location, "bin", "java.exe")
+                    if os.path.exists(java_exe):
+                        desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+                        shortcut_path = os.path.join(desktop, "Java.lnk")
+                        
+                        # Create shortcut using Windows API
+                        import pythoncom
+                        from win32com.client import Dispatch
+                        
+                        shell = Dispatch('WScript.Shell')
+                        shortcut = shell.CreateShortCut(shortcut_path)
+                        shortcut.Targetpath = java_exe
+                        shortcut.WorkingDirectory = os.path.dirname(java_exe)
+                        shortcut.save()
+                
+                self.progress.emit(100)
+                self.finished.emit(True)
+                
+            except Exception as e:
+                self.error.emit(str(e))
+            finally:
+                # Clean up installer
+                if os.path.exists(installer_path):
+                    os.remove(installer_path)
+
     class InstallWorker(QThread):
-        progress = pyqtSignal(int)  # Signal to emit progress updates
-        finished = pyqtSignal(str)  # Signal to emit when installation is complete
-        error = pyqtSignal(str)  # Signal to emit if an error occurs
+        progress = pyqtSignal(int)
+        finished = pyqtSignal(str)
+        error = pyqtSignal(str)
 
         def __init__(self, modloader, version, minecraft_dir, parent=None):
             super().__init__(parent)
-            self.main_window = main_window
+            self.main_window = parent
             self.modloader = modloader
             self.version = version
             self.minecraft_dir = minecraft_dir
@@ -155,10 +332,8 @@ if internet == True:
         def run(self):
             try:
                 if self.modloader == "Fabric":
-                    self.install_vanilla()
                     self.install_fabric()
                 elif self.modloader == "Forge":
-                    self.install_vanilla()
                     self.install_forge()
                 else:
                     self.install_vanilla()
@@ -169,13 +344,18 @@ if internet == True:
             try:
                 latest_fabric_loader = minecraft_launcher_lib.fabric.get_latest_loader_version()
                 total_steps = 3
-                self.progress.emit(0)  # Initial progress
-                self.progress.emit(int((1 / total_steps) * 100))  # 33% progress
+                self.progress.emit(0)
+                
+                # Step 1: Download Fabric loader
+                self.progress.emit(33)
                 minecraft_launcher_lib.fabric.install_fabric(self.version, self.minecraft_dir)
-                self.progress.emit(int((2 / total_steps) * 100))  # 66% progress
+                
+                # Step 2: Install Fabric
+                self.progress.emit(66)
+                minecraft_launcher_lib.fabric.install_fabric(self.version, self.minecraft_dir)
+                
                 self.progress.emit(100)
-                self.finished.emit(
-                    f"Fabric (loader {latest_fabric_loader}) for Minecraft {self.version} installed successfully.")
+                self.finished.emit(f"Fabric (loader {latest_fabric_loader}) for Minecraft {self.version} installed successfully.")
             except Exception as e:
                 self.error.emit(str(e))
 
@@ -183,27 +363,120 @@ if internet == True:
             try:
                 forge_version = minecraft_launcher_lib.forge.find_forge_version(self.version)
                 total_steps = 3
-                self.progress.emit(0)  # Initial progress
-                self.progress.emit(int((1 / total_steps) * 100))  # 33% progress
+                self.progress.emit(0)
+                
+                # Step 1: Download Forge installer
+                self.progress.emit(33)
                 minecraft_launcher_lib.forge.install_forge_version(forge_version, self.minecraft_dir)
-                self.progress.emit(int((2 / total_steps) * 100))  # 66% progress
-                self.progress.emit(100)  # 100% progress
+                
+                # Step 2: Install Forge
+                self.progress.emit(66)
+                minecraft_launcher_lib.forge.install_forge_version(forge_version, self.minecraft_dir)
+                
+                self.progress.emit(100)
                 self.finished.emit(f"Forge for Minecraft {self.version} installed successfully.")
             except Exception as e:
                 self.error.emit(str(e))
 
         def install_vanilla(self):
             try:
-                selected_version = self.main_window.version_combo.currentText()
                 total_steps = 3
                 self.progress.emit(0)
-                self.progress.emit(int((1 / total_steps) * 100))  # 33% progress
-                minecraft_launcher_lib.install.install_minecraft_version(selected_version, self.minecraft_dir)
-                self.progress.emit(int((2 / total_steps) * 100))  # 66% progress
+                
+                # Step 1: Download Minecraft version
+                self.progress.emit(33)
+                minecraft_launcher_lib.install.install_minecraft_version(self.version, self.minecraft_dir)
+                
+                # Step 2: Install dependencies
+                self.progress.emit(66)
+                minecraft_launcher_lib.install.install_minecraft_version(self.version, self.minecraft_dir)
+                
                 self.progress.emit(100)
                 self.finished.emit(f"Minecraft {self.version} installed successfully.")
             except Exception as e:
                 self.error.emit(str(e))
+
+        def edit_skin(self, profile_name, skin_type="slim"):
+            try:
+                # Get the version directory
+                version_dir = os.path.join(self.minecraft_dir, "versions", self.version)
+                if not os.path.exists(version_dir):
+                    self.error.emit("Minecraft version not found")
+                    return
+
+                # Get the jar file
+                jar_file = os.path.join(version_dir, f"{self.version}.jar")
+                if not os.path.exists(jar_file):
+                    self.error.emit("Minecraft jar file not found")
+                    return
+
+                # Create a temporary directory for extraction
+                temp_dir = os.path.join(self.minecraft_dir, "temp_skin_edit")
+                os.makedirs(temp_dir, exist_ok=True)
+
+                # Extract the jar file
+                with zipfile.ZipFile(jar_file, 'r') as jar:
+                    jar.extractall(temp_dir)
+
+                # List of skins to replace
+                skins_to_replace = ["alex", "ari", "efe", "kai", "makena", "noor", "steve", "sunny", "zury"]
+                replaced_count = 0
+
+                # Ask user to select a skin file
+                skin_file, _ = QFileDialog.getOpenFileName(
+                    self.main_window,
+                    "Select Skin File",
+                    "",
+                    "PNG Files (*.png)"
+                )
+                
+                if not skin_file:
+                    self.error.emit("No skin file selected")
+                    return
+
+                # Show preview and get skin type
+                preview_dialog = SkinPreviewDialog(self.main_window)
+                preview_dialog.set_preview(skin_file)
+                
+                if preview_dialog.exec_() != QDialog.Accepted:
+                    self.error.emit("Skin selection cancelled")
+                    return
+                    
+                selected_type = preview_dialog.get_skin_type()
+
+                # Path to the skins directory
+                skins_dir = os.path.join(temp_dir, "assets", "minecraft", "textures", "entity", "player", selected_type)
+                if not os.path.exists(skins_dir):
+                    self.error.emit(f"Skins directory not found for type: {selected_type}")
+                    return
+
+                # Replace each skin
+                for skin_name in skins_to_replace:
+                    target_path = os.path.join(skins_dir, f"{skin_name}.png")
+                    if os.path.exists(target_path):
+                        shutil.copy2(skin_file, target_path)
+                        replaced_count += 1
+
+                if replaced_count == 0:
+                    self.error.emit("No matching skin files found to replace")
+                    return
+
+                # Repack the jar file
+                with zipfile.ZipFile(jar_file, 'w') as jar:
+                    for root, _, files in os.walk(temp_dir):
+                        for file in files:
+                            file_path = os.path.join(root, file)
+                            arcname = os.path.relpath(file_path, temp_dir)
+                            jar.write(file_path, arcname)
+
+                self.finished.emit(f"Successfully replaced {replaced_count} skins in {selected_type} directory")
+
+            except Exception as e:
+                self.error.emit(f"Failed to edit skins: {e}")
+            finally:
+                # Clean up
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
 
     class ModrinthManager(QDialog):
         def __init__(self, main_window, instance_path):
@@ -510,6 +783,29 @@ if internet == True:
             self.lang_combo.setCurrentText(self.parent.options.get("language", "English"))
             layout.addRow(lang_label, self.lang_combo)
 
+            # Java path option
+            java_layout = QHBoxLayout()
+            self.java_path_input = QLineEdit()
+            self.java_path_input.setText(self.parent.options.get("java_path", ""))
+            self.java_path_input.setPlaceholderText("Path to Java executable")
+            java_layout.addWidget(self.java_path_input)
+            
+            browse_button = QPushButton("Browse")
+            browse_button.clicked.connect(self.browse_java_path)
+            java_layout.addWidget(browse_button)
+            
+            layout.addRow(QLabel("Java Path:"), java_layout)
+
+            # Auto-install Java option
+            self.auto_install_java_checkbox = QCheckBox("Automatically install Java if not found")
+            self.auto_install_java_checkbox.setChecked(self.parent.options.get("auto_install_java", True))
+            layout.addRow(self.auto_install_java_checkbox)
+
+            # Hide launcher option
+            self.hide_launcher_checkbox = QCheckBox("Hide launcher when game is running")
+            self.hide_launcher_checkbox.setChecked(self.parent.options.get("hide_launcher", False))
+            layout.addRow(self.hide_launcher_checkbox)
+
             # Save button
             save_button = QPushButton("Save Options")
             save_button.clicked.connect(self.save_options)
@@ -529,6 +825,46 @@ if internet == True:
 
             self.setLayout(layout)
 
+        def browse_java_path(self):
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select Java Executable",
+                "",
+                "Executable Files (*.exe);;All Files (*)"
+            )
+            if file_path:
+                self.java_path_input.setText(file_path)
+
+        def save_options(self):
+            theme_name = self.theme_input.text()
+            language = self.lang_combo.currentText()
+            hide_launcher = self.hide_launcher_checkbox.isChecked()
+            java_path = self.java_path_input.text()
+            auto_install_java = self.auto_install_java_checkbox.isChecked()
+
+            valid_themes = ["Default", "Dark", "Light"]
+            if theme_name not in valid_themes:
+                QMessageBox.warning(self, "Invalid Theme", f"Theme '{theme_name}' is not valid.")
+                return
+
+            # Update the parent's options
+            self.parent.options = {
+                "theme": theme_name,
+                "language": language,
+                "hide_launcher": hide_launcher,
+                "java_path": java_path,
+                "auto_install_java": auto_install_java
+            }
+
+            # Save options using orjson
+            try:
+                with open(self.parent.options_file, "wb") as file:
+                    file.write(orjson.dumps(self.parent.options, option=orjson.OPT_INDENT_2))
+                QMessageBox.information(self, "Options Saved", "Settings have been saved.")
+                self.play_funny_sound()
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to save options: {e}")
+
         def hamster_clicked(self, event):
             if event.button() == Qt.LeftButton:
                 self.play_funny_sound()
@@ -546,29 +882,6 @@ if internet == True:
         def show_options_dialog(self):
             self.init()
             self.exec_()
-
-        def save_options(self):
-            theme_name = self.theme_input.text()
-            language = self.lang_combo.currentText()
-            hide_launcher = self.hide_launcher_checkbox.isChecked()
-
-            valid_themes = ["Default", "Dark", "Light"]
-            if theme_name not in valid_themes:
-                QMessageBox.warning(self, "Invalid Theme", f"Theme '{theme_name}' is not valid.")
-                return
-
-            # Update the parent's options
-            self.parent.options = {
-                "theme": theme_name,
-                "language": language,
-                "hide_launcher": hide_launcher
-            }
-
-            # Save options to JSON
-            self.parent.save_options()
-
-            QMessageBox.information(self, "Options Saved", "Settings have been saved.")
-            self.play_funny_sound()
 
     class MinecraftLauncher(QWidget):
         def __init__(self):
@@ -792,23 +1105,8 @@ if internet == True:
 
         def change_skin(self):
             profile_name = self.profile_combo.currentText()
-            file_path, _ = QFileDialog.getOpenFileName(self, "Select Skin", "", "PNG Files (*.png)")
-
-            if not file_path:
-                QMessageBox.warning(self, "No File Selected", "Please select a skin file.")
-                return
-
-            try:
-                profile_path = os.path.join(minecraft_directory, profile_name)
-                skin_path = os.path.join(profile_path, "skin.png")
-                os.makedirs(profile_path, exist_ok=True)
-
-                with open(file_path, "rb") as src, open(skin_path, "wb") as dest:
-                    dest.write(src.read())
-
-                QMessageBox.information(self, "Skin Changed", f"Skin for '{profile_name}' has been updated.")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to change skin: {e}")
+            self.worker = InstallWorker(self.modloader_combo.currentText(), self.version_combo.currentText(), minecraft_directory)
+            self.worker.edit_skin(profile_name)
 
         def update_installation_progress(self, value):
             print(f"Installation Progress: {value}%")
@@ -857,68 +1155,123 @@ if internet == True:
 
         def load_profiles(self):
             if os.path.exists(self.profiles_file):
-                with open(self.profiles_file, "r") as file:
-                    return json.load(file)
-            return {"Default": {"username": f"Player", "version": "latest", "modloader": "Vanilla"}}
+                try:
+                    with open(self.profiles_file, "rb") as file:
+                        return orjson.loads(file.read())
+                except Exception as e:
+                    print(f"Failed to load profiles: {e}. Using default profile.")
+                    return {"Default": {"username": "Player", "version": "latest", "modloader": "Vanilla"}}
+            return {"Default": {"username": "Player", "version": "latest", "modloader": "Vanilla"}}
 
         def save_profiles(self):
-            os.makedirs(os.path.dirname(self.profiles_file), exist_ok=True)
-            with open(self.profiles_file, "w") as file:
-                json.dump(self.profiles, file, indent=4)
+            try:
+                os.makedirs(os.path.dirname(self.profiles_file), exist_ok=True)
+                with open(self.profiles_file, "wb") as file:
+                    file.write(orjson.dumps(self.profiles, option=orjson.OPT_INDENT_2))
+                print("Profiles saved successfully.")
+            except Exception as e:
+                print(f"Failed to save profiles: {e}")
 
         def launch_minecraft(self):
-            profile_name = self.profile_combo.currentText()
-            selected_version = self.version_combo.currentText()
-            selected_modloader = self.modloader_combo.currentText()
-
-            # Get available Minecraft versions
-            all_versions = minecraft_launcher_lib.utils.get_installed_versions(minecraft_directory)
-            valid_versions = [v['id'] for v in all_versions]
-
-            # Validate selected version exists
-            if selected_version not in valid_versions:
-                QMessageBox.critical(self, "Error", f"Version {selected_version} not installed")
-                return
-
-            # Handle modloader-specific checks
-            forge_version = None
-            if selected_modloader == "Forge":
-                forge_version = minecraft_launcher_lib.forge.find_forge_version(selected_version)
-                if not forge_version:
-                    QMessageBox.critical(self, "Error", f"No Forge version found for {selected_version}")
-                    return
-                forge_version = forge_version[6:]  # Adjust based on actual forge version format
-
-            mods_folder = os.path.join(minecraft_directory, profile_name, "mods")
-
-            options = {
-                "username": self.username_input.text(),
-                "uuid": "dummy-uuid",
-                "token": "dummy-token",
-                "jvmArguments": [f"-Dfabric.modDir={mods_folder}"] if selected_modloader == "Fabric" else []
-            }
-
             try:
-                if selected_modloader == "Fabric":
-                    # Check if Fabric supports the version
-                    fabric_versions = minecraft_launcher_lib.fabric.get_all_minecraft_versions()
-                    if selected_version not in [v['version'] for v in fabric_versions]:
-                        QMessageBox.critical(self, "Error", f"Fabric doesn't support {selected_version}")
+                # Check for Java installation
+                if not self.check_java_installation():
+                    if not self.install_java():
                         return
-                    loader_version = minecraft_launcher_lib.fabric.get_latest_loader_version()
-                    version_to_launch = f"fabric-loader-{loader_version}-{selected_version}"
-                elif selected_modloader == "Forge":
-                    version_to_launch = f"{selected_version}-forge-{forge_version}"
-                else:
-                    version_to_launch = selected_version
 
+                profile_name = self.profile_combo.currentText()
+                selected_version = self.version_combo.currentText()
+                selected_modloader = self.modloader_combo.currentText()
+
+                # Get all installed Minecraft versions
+                all_versions = minecraft_launcher_lib.utils.get_installed_versions(minecraft_directory)
+                valid_versions = [v['id'] for v in all_versions]
+
+                # Determine the version to launch based on modloader
+                version_to_launch = selected_version  # Default to vanilla
+                forge_version = None
+
+                # Handle Forge-specific logic
+                if selected_modloader == "Forge":
+                    forge_versions = minecraft_launcher_lib.forge.find_forge_version(selected_version)
+                    if not forge_versions:
+                        QMessageBox.critical(self, "Error", f"No Forge version found for {selected_version}")
+                        return
+                    forge_version = forge_versions[0]  # Take the first available Forge version
+                    version_to_launch = f"{selected_version}-forge-{forge_version}"
+
+                # Handle Fabric-specific logic
+                elif selected_modloader == "Fabric":
+                    try:
+                        fabric_versions = minecraft_launcher_lib.fabric.get_all_minecraft_versions()
+                        if selected_version not in [v['version'] for v in fabric_versions]:
+                            QMessageBox.critical(self, "Error", f"Fabric doesn't support {selected_version}")
+                            return
+                        loader_version = minecraft_launcher_lib.fabric.get_latest_loader_version()
+                        version_to_launch = f"fabric-loader-{loader_version}-{selected_version}"
+                        
+                        # Ensure Fabric is installed
+                        if not minecraft_launcher_lib.fabric.is_fabric_installed(version_to_launch, minecraft_directory):
+                            QMessageBox.critical(self, "Error", "Fabric is not installed. Please install it first.")
+                            return
+                    except Exception as e:
+                        QMessageBox.critical(self, "Error", f"Failed to initialize Fabric: {e}")
+                        return
+
+                # Validate that the determined version is installed
+                if version_to_launch not in valid_versions:
+                    QMessageBox.critical(self, "Error", f"Version {version_to_launch} is not installed. Please install it first.")
+                    return
+
+                # Set up mods directory for Fabric and ensure it exists
+                mods_folder = os.path.join(minecraft_directory, profile_name, "mods")
+                if selected_modloader == "Fabric":
+                    os.makedirs(mods_folder, exist_ok=True)
+
+                # Prepare launch options without JVM arguments
+                options = {
+                    "username": self.username_input.text(),
+                    "uuid": "dummy-uuid",
+                    "token": "dummy-token",
+                    "javaPath": self.options.get("java_path", "")
+                }
+
+                # Generate and execute the Minecraft command
                 minecraft_command = minecraft_launcher_lib.command.get_minecraft_command(
                     version_to_launch, minecraft_directory, options
                 )
-
-                subprocess.run(minecraft_command, creationflags=subprocess.CREATE_NO_WINDOW)
+                
+                # Hide launcher if option is enabled
+                if self.options.get("hide_launcher", False):
+                    self.hide()
+                
+                # Launch Minecraft with proper error handling
+                process = subprocess.Popen(
+                    minecraft_command,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                
+                # Wait for the process to complete
+                stdout, stderr = process.communicate()
+                
+                # Show launcher again after game closes
+                if self.options.get("hide_launcher", False):
+                    self.show()
+                    
+                # Check if there were any errors
+                if process.returncode != 0:
+                    error_message = f"Failed to launch Minecraft (Exit code: {process.returncode})"
+                    if stderr:
+                        error_message += f"\n\nError output:\n{stderr}"
+                    QMessageBox.critical(self, "Error", error_message)
+                
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to launch Minecraft: {e}")
+                if self.options.get("hide_launcher", False):
+                    self.show()
 
         def load_options(self):
             default_options = {
@@ -929,8 +1282,8 @@ if internet == True:
 
             if os.path.exists(self.options_file):
                 try:
-                    with open(self.options_file, "r") as file:
-                        return json.load(file)
+                    with open(self.options_file, "rb") as file:
+                        return orjson.loads(file.read())
                 except Exception as e:
                     print(f"Failed to load options: {e}. Using default options.")
                     return default_options
@@ -940,22 +1293,19 @@ if internet == True:
 
         def save_options(self):
             try:
-                with open(self.options_file, "w") as file:
-                    json.dump(self.options, file, indent=4)
+                with open(self.options_file, "wb") as file:
+                    file.write(orjson.dumps(self.options, option=orjson.OPT_INDENT_2))
                 print("Options saved successfully.")
             except Exception as e:
                 print(f"Failed to save options: {e}")
 
         def apply_options(self):
-            # Apply theme (example)
             theme = self.options.get("theme", "Default")
             print(f"Applying theme: {theme}")
 
-            # Apply language (example)
             language = self.options.get("language", "English")
             print(f"Applying language: {language}")
 
-            # Apply hide launcher option
             hide_launcher = self.options.get("hide_launcher", False)
             print(f"Hide launcher when game is running: {hide_launcher}")
 
@@ -1032,6 +1382,276 @@ if internet == True:
                 self.face_icon_button.setIcon(QIcon())
                 print(f"Error fetching skin: {e}")
 
+        def check_java_installation(self):
+            java_path = self.options.get("java_path", "")
+            if java_path and os.path.exists(java_path):
+                return True
+            
+            # Try to find Java in common locations
+            common_paths = [
+                os.path.join(os.environ.get("ProgramFiles", ""), "Java", "jdk-17", "bin", "java.exe"),
+                os.path.join(os.environ.get("ProgramFiles(x86)", ""), "Java", "jdk-17", "bin", "java.exe"),
+                os.path.join(os.environ.get("ProgramFiles", ""), "Java", "jre-17", "bin", "java.exe"),
+                os.path.join(os.environ.get("ProgramFiles(x86)", ""), "Java", "jre-17", "bin", "java.exe"),
+            ]
+            
+            for path in common_paths:
+                if os.path.exists(path):
+                    self.options["java_path"] = path
+                    self.save_options()
+                    return True
+            
+            return False
+
+        def install_java(self):
+            # Show Java installation options dialog
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Java Installation Options")
+            layout = QVBoxLayout()
+
+            # Java version selection
+            version_group = QGroupBox("Java Version")
+            version_layout = QVBoxLayout()
+            java_versions = {
+                "Java 8": "https://download.oracle.com/java/8/latest/jdk-8_windows-x64_bin.exe",
+                "Java 11": "https://download.oracle.com/java/11/latest/jdk-11_windows-x64_bin.exe",
+                "Java 17": "https://download.oracle.com/java/17/latest/jdk-17_windows-x64_bin.exe",
+                "Java 21": "https://download.oracle.com/java/21/latest/jdk-21_windows-x64_bin.exe"
+            }
+            
+            version_buttons = QButtonGroup()
+            for version, url in java_versions.items():
+                radio = QRadioButton(version)
+                version_buttons.addButton(radio)
+                version_layout.addWidget(radio)
+            
+            # Select Java 17 by default
+            version_buttons.buttons()[2].setChecked(True)
+            version_group.setLayout(version_layout)
+            layout.addWidget(version_group)
+
+            # Installation location
+            location_group = QGroupBox("Installation Location")
+            location_layout = QHBoxLayout()
+            location_input = QLineEdit()
+            location_input.setText(os.path.join(os.environ.get("ProgramFiles", ""), "Java"))
+            location_layout.addWidget(location_input)
+            browse_button = QPushButton("Browse")
+            browse_button.clicked.connect(lambda: self.browse_java_location(location_input))
+            location_layout.addWidget(browse_button)
+            location_group.setLayout(location_layout)
+            layout.addWidget(location_group)
+
+            # Additional options
+            options_group = QGroupBox("Additional Options")
+            options_layout = QVBoxLayout()
+            add_to_path = QCheckBox("Add Java to system PATH")
+            add_to_path.setChecked(True)
+            options_layout.addWidget(add_to_path)
+            create_desktop_shortcut = QCheckBox("Create desktop shortcut")
+            create_desktop_shortcut.setChecked(True)
+            options_layout.addWidget(create_desktop_shortcut)
+            options_group.setLayout(options_layout)
+            layout.addWidget(options_group)
+
+            # Buttons
+            button_layout = QHBoxLayout()
+            install_button = QPushButton("Install")
+            cancel_button = QPushButton("Cancel")
+            button_layout.addWidget(install_button)
+            button_layout.addWidget(cancel_button)
+            layout.addLayout(button_layout)
+
+            dialog.setLayout(layout)
+
+            # Connect signals
+            install_button.clicked.connect(dialog.accept)
+            cancel_button.clicked.connect(dialog.reject)
+
+            if dialog.exec_() == QDialog.Accepted:
+                # Get selected options
+                selected_version = version_buttons.checkedButton().text()
+                java_url = java_versions[selected_version]
+                install_location = location_input.text()
+                add_to_path_enabled = add_to_path.isChecked()
+                create_shortcut = create_desktop_shortcut.isChecked()
+
+                # Show installation progress
+                progress_dialog = QProgressDialog("Installing Java...", "Cancel", 0, 100, self)
+                progress_dialog.setWindowTitle("Java Installation")
+                progress_dialog.setWindowModality(Qt.WindowModal)
+
+                # Create installer instance
+                installer = JavaInstaller(self)
+                installer.set_installation_options(
+                    java_url,
+                    install_location,
+                    add_to_path_enabled,
+                    create_shortcut
+                )
+                
+                installer.progress.connect(progress_dialog.setValue)
+                installer.finished.connect(lambda success: self.on_java_install_finished(success, progress_dialog))
+                installer.error.connect(lambda error: self.on_java_install_error(error, progress_dialog))
+                
+                installer.start()
+                progress_dialog.exec_()
+                
+                return True
+            return False
+
+        def browse_java_location(self, location_input):
+            directory = QFileDialog.getExistingDirectory(
+                self,
+                "Select Java Installation Directory",
+                location_input.text(),
+                QFileDialog.ShowDirsOnly
+            )
+            if directory:
+                location_input.setText(directory)
+
+        def on_java_install_finished(self, success, progress_dialog):
+            progress_dialog.close()
+            if success:
+                QMessageBox.information(self, "Success", "Java has been installed successfully.")
+            else:
+                QMessageBox.warning(self, "Error", "Failed to install Java. Please install it manually.")
+
+        def on_java_install_error(self, error, progress_dialog):
+            progress_dialog.close()
+            QMessageBox.critical(self, "Error", f"Failed to install Java: {error}")
+
+    class SkinPreviewDialog(QDialog):
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.setWindowTitle("Skin Preview")
+            self.setGeometry(100, 100, 400, 500)
+            
+            layout = QVBoxLayout()
+            
+            # Preview image
+            self.preview_label = QLabel()
+            self.preview_label.setAlignment(Qt.AlignCenter)
+            layout.addWidget(self.preview_label)
+            
+            # Skin type selection
+            type_group = QGroupBox("Skin Type")
+            type_layout = QVBoxLayout()
+            self.type_combo = QComboBox()
+            self.type_combo.addItems(["wide", "slim"])
+            type_layout.addWidget(self.type_combo)
+            type_group.setLayout(type_layout)
+            layout.addWidget(type_group)
+            
+            # Buttons
+            button_layout = QHBoxLayout()
+            self.accept_button = QPushButton("Use This Skin")
+            self.cancel_button = QPushButton("Cancel")
+            button_layout.addWidget(self.accept_button)
+            button_layout.addWidget(self.cancel_button)
+            layout.addLayout(button_layout)
+            
+            self.setLayout(layout)
+            
+            # Connect signals
+            self.accept_button.clicked.connect(self.accept)
+            self.cancel_button.clicked.connect(self.reject)
+
+        def set_preview(self, skin_path):
+            pixmap = QPixmap(skin_path)
+            if not pixmap.isNull():
+                scaled_pixmap = pixmap.scaled(200, 200, Qt.KeepAspectRatio)
+                self.preview_label.setPixmap(scaled_pixmap)
+
+        def get_skin_type(self):
+            return self.type_combo.currentText()
+
+    class Skin3DPreviewWidget(QOpenGLWidget):
+        def __init__(self, skin_path, parent=None):
+            super().__init__(parent)
+            self.skin_path = skin_path
+            self.texture_id = None
+            self.angle = 0
+            self.timer = QTimer(self)
+            self.timer.timeout.connect(self.rotate)
+            self.timer.start(30)  # ~33 FPS
+
+        def initializeGL(self):
+            glEnable(GL_DEPTH_TEST)
+            glEnable(GL_TEXTURE_2D)
+            self.texture_id = self.load_skin_texture(self.skin_path)
+
+        def resizeGL(self, w, h):
+            glViewport(0, 0, w, h)
+            glMatrixMode(GL_PROJECTION)
+            glLoadIdentity()
+            gluPerspective(45, w / h if h else 1, 0.1, 100.0)
+            glMatrixMode(GL_MODELVIEW)
+
+        def paintGL(self):
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+            glLoadIdentity()
+            glTranslatef(0, 0, -5)
+            glRotatef(self.angle, 0, 1, 0)
+            glBindTexture(GL_TEXTURE_2D, self.texture_id)
+            self.draw_player_model()
+
+        def rotate(self):
+            self.angle = (self.angle + 2) % 360
+            self.update()
+
+        def load_skin_texture(self, path):
+            from PIL import Image
+            img = Image.open(path).convert('RGBA').transpose(Image.FLIP_TOP_BOTTOM)
+            img_data = np.array(img)
+            texture_id = glGenTextures(1)
+            glBindTexture(GL_TEXTURE_2D, texture_id)
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img.width, img.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, img_data)
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+            return texture_id
+
+        def draw_player_model(self):
+            # Draw a simple player: head (cube), body (rect), arms/legs (rects)
+            # For brevity, only the head is textured here. You can expand this for full body.
+            glPushMatrix()
+            # Head
+            glTranslatef(0, 0.75, 0)
+            self.draw_cube(1.0)
+            glPopMatrix()
+            # Body
+            glPushMatrix()
+            glScalef(0.75, 1.0, 0.4)
+            glTranslatef(0, -0.25, 0)
+            self.draw_cube(1.0)
+            glPopMatrix()
+            # Arms
+            for x in [-0.65, 0.65]:
+                glPushMatrix()
+                glTranslatef(x, 0.25, 0)
+                glScalef(0.25, 0.75, 0.25)
+                self.draw_cube(1.0)
+                glPopMatrix()
+            # Legs
+            for x in [-0.25, 0.25]:
+                glPushMatrix()
+                glTranslatef(x, -1.0, 0)
+                glScalef(0.25, 0.75, 0.25)
+                self.draw_cube(1.0)
+                glPopMatrix()
+
+        def draw_cube(self, size):
+            # Draw a textured cube (for the head)
+            hs = size / 2
+            glBegin(GL_QUADS)
+            # Front
+            glTexCoord2f(0.125, 0.25); glVertex3f(-hs, -hs, hs)
+            glTexCoord2f(0.25, 0.25); glVertex3f(hs, -hs, hs)
+            glTexCoord2f(0.25, 0.375); glVertex3f(hs, hs, hs)
+            glTexCoord2f(0.125, 0.375); glVertex3f(-hs, hs, hs)
+            # ... (repeat for other faces, mapping skin texture coordinates)
+            glEnd()
+
     if __name__ == "__main__":
         MinecraftLauncher.download_files()
         app = QApplication(sys.argv)
@@ -1085,6 +1705,29 @@ else:
             self.lang_combo.setCurrentText(self.parent.options.get("language", "English"))
             layout.addRow(lang_label, self.lang_combo)
 
+            # Java path option
+            java_layout = QHBoxLayout()
+            self.java_path_input = QLineEdit()
+            self.java_path_input.setText(self.parent.options.get("java_path", ""))
+            self.java_path_input.setPlaceholderText("Path to Java executable")
+            java_layout.addWidget(self.java_path_input)
+            
+            browse_button = QPushButton("Browse")
+            browse_button.clicked.connect(self.browse_java_path)
+            java_layout.addWidget(browse_button)
+            
+            layout.addRow(QLabel("Java Path:"), java_layout)
+
+            # Auto-install Java option
+            self.auto_install_java_checkbox = QCheckBox("Automatically install Java if not found")
+            self.auto_install_java_checkbox.setChecked(self.parent.options.get("auto_install_java", True))
+            layout.addRow(self.auto_install_java_checkbox)
+
+            # Hide launcher option
+            self.hide_launcher_checkbox = QCheckBox("Hide launcher when game is running")
+            self.hide_launcher_checkbox.setChecked(self.parent.options.get("hide_launcher", False))
+            layout.addRow(self.hide_launcher_checkbox)
+
             # Save button
             save_button = QPushButton("Save Options")
             save_button.clicked.connect(self.save_options)
@@ -1104,6 +1747,46 @@ else:
 
             self.setLayout(layout)
 
+        def browse_java_path(self):
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select Java Executable",
+                "",
+                "Executable Files (*.exe);;All Files (*)"
+            )
+            if file_path:
+                self.java_path_input.setText(file_path)
+
+        def save_options(self):
+            theme_name = self.theme_input.text()
+            language = self.lang_combo.currentText()
+            hide_launcher = self.hide_launcher_checkbox.isChecked()
+            java_path = self.java_path_input.text()
+            auto_install_java = self.auto_install_java_checkbox.isChecked()
+
+            valid_themes = ["Default", "Dark", "Light"]
+            if theme_name not in valid_themes:
+                QMessageBox.warning(self, "Invalid Theme", f"Theme '{theme_name}' is not valid.")
+                return
+
+            # Update the parent's options
+            self.parent.options = {
+                "theme": theme_name,
+                "language": language,
+                "hide_launcher": hide_launcher,
+                "java_path": java_path,
+                "auto_install_java": auto_install_java
+            }
+
+            # Save options using orjson
+            try:
+                with open(self.parent.options_file, "wb") as file:
+                    file.write(orjson.dumps(self.parent.options, option=orjson.OPT_INDENT_2))
+                QMessageBox.information(self, "Options Saved", "Settings have been saved.")
+                self.play_funny_sound()
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to save options: {e}")
+
         def hamster_clicked(self, event):
             if event.button() == Qt.LeftButton:
                 self.play_funny_sound()
@@ -1121,29 +1804,6 @@ else:
         def show_options_dialog(self):
             self.init()
             self.exec_()
-
-        def save_options(self):
-            theme_name = self.theme_input.text()
-            language = self.lang_combo.currentText()
-            hide_launcher = self.hide_launcher_checkbox.isChecked()
-
-            valid_themes = ["Default", "Dark", "Light"]
-            if theme_name not in valid_themes:
-                QMessageBox.warning(self, "Invalid Theme", f"Theme '{theme_name}' is not valid.")
-                return
-
-            # Update the parent's options
-            self.parent.options = {
-                "theme": theme_name,
-                "language": language,
-                "hide_launcher": hide_launcher
-            }
-
-            # Save options to JSON
-            self.parent.save_options()
-
-            QMessageBox.information(self, "Options Saved", "Settings have been saved.")
-            self.play_funny_sound()
 
     class MinecraftLauncher(QWidget):
         def __init__(self):
@@ -1339,55 +1999,119 @@ else:
 
         def load_profiles(self):
             if os.path.exists(self.profiles_file):
-                with open(self.profiles_file, "r") as file:
-                    return json.load(file)
-            return {"Default": {"username": f"Player", "version": "latest", "modloader": "Vanilla"}}
+                with open(self.profiles_file, "rb") as file:
+                    return orjson.loads(file.read())
+            return {"Default": {"username": "Player", "version": "latest", "modloader": "Vanilla"}}
 
         def save_profiles(self):
-            os.makedirs(os.path.dirname(self.profiles_file), exist_ok=True)
-            with open(self.profiles_file, "w") as file:
-                json.dump(self.profiles, file, indent=4)
+            try:
+                os.makedirs(os.path.dirname(self.profiles_file), exist_ok=True)
+                with open(self.profiles_file, "wb") as file:
+                    file.write(orjson.dumps(self.profiles, option=orjson.OPT_INDENT_2))
+                print("Profiles saved successfully.")
+            except Exception as e:
+                print(f"Failed to save profiles: {e}")
 
         def launch_minecraft(self):
-            profile_name = self.profile_combo.currentText()
-            version_to_launch = self.version_combo.currentText()
+            try:
+                # Check for Java installation
+                if not self.check_java_installation():
+                    if not self.install_java():
+                        return
 
-            all_versions = minecraft_launcher_lib.utils.get_installed_versions(minecraft_directory)
-            if version_to_launch not in [v['id'] for v in all_versions]:
-                raise ValueError(f"Version '{version_to_launch}' is not installed.")
+                profile_name = self.profile_combo.currentText()
+                selected_version = self.version_combo.currentText()
+                selected_modloader = self.modloader_combo.currentText()
 
-            # Create mods folder if it doesn't exist
-            mods_folder = os.path.join(minecraft_directory, "mods")
-            if not os.path.exists(mods_folder):
-                os.makedirs(mods_folder)
+                # Get all installed Minecraft versions
+                all_versions = minecraft_launcher_lib.utils.get_installed_versions(minecraft_directory)
+                valid_versions = [v['id'] for v in all_versions]
 
-            # Launch options
-            options = {
-                "username": profile_name,
-                "uuid": "dummy-uuid",  # Use generated UUID for offline mode
-                "token": "dummy-uuid",  # No token for offline mode
-                "jvmArguments": [f"-Dfabric.modDir={mods_folder}"],  # Custom JVM arguments
-            }
+                # Determine the version to launch based on modloader
+                version_to_launch = selected_version  # Default to vanilla
+                forge_version = None
 
-            # Generate Minecraft command
-            minecraft_command = minecraft_launcher_lib.command.get_minecraft_command(version_to_launch,
-                                                                                     minecraft_directory, options)
+                # Handle Forge-specific logic
+                if selected_modloader == "Forge":
+                    forge_versions = minecraft_launcher_lib.forge.find_forge_version(selected_version)
+                    if not forge_versions:
+                        QMessageBox.critical(self, "Error", f"No Forge version found for {selected_version}")
+                        return
+                    forge_version = forge_versions[0]  # Take the first available Forge version
+                    version_to_launch = f"{selected_version}-forge-{forge_version}"
 
-            # Launch Minecraft
-            print(f"Launching Minecraft with command: {' '.join(minecraft_command)}")
-            result = subprocess.run(
-                minecraft_command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                shell=True
-            )
+                # Handle Fabric-specific logic
+                elif selected_modloader == "Fabric":
+                    try:
+                        fabric_versions = minecraft_launcher_lib.fabric.get_all_minecraft_versions()
+                        if selected_version not in [v['version'] for v in fabric_versions]:
+                            QMessageBox.critical(self, "Error", f"Fabric doesn't support {selected_version}")
+                            return
+                        loader_version = minecraft_launcher_lib.fabric.get_latest_loader_version()
+                        version_to_launch = f"fabric-loader-{loader_version}-{selected_version}"
+                        
+                        # Ensure Fabric is installed
+                        if not minecraft_launcher_lib.fabric.is_fabric_installed(version_to_launch, minecraft_directory):
+                            QMessageBox.critical(self, "Error", "Fabric is not installed. Please install it first.")
+                            return
+                    except Exception as e:
+                        QMessageBox.critical(self, "Error", f"Failed to initialize Fabric: {e}")
+                        return
 
-            # Check for errors
-            if result.returncode != 0:
-                print(f"Minecraft failed to launch. Error: {result.stderr}")
-            else:
-                print("Minecraft launched successfully!")
+                # Validate that the determined version is installed
+                if version_to_launch not in valid_versions:
+                    QMessageBox.critical(self, "Error", f"Version {version_to_launch} is not installed. Please install it first.")
+                    return
+
+                # Set up mods directory for Fabric and ensure it exists
+                mods_folder = os.path.join(minecraft_directory, profile_name, "mods")
+                if selected_modloader == "Fabric":
+                    os.makedirs(mods_folder, exist_ok=True)
+
+                # Prepare launch options without JVM arguments
+                options = {
+                    "username": self.username_input.text(),
+                    "uuid": "dummy-uuid",
+                    "token": "dummy-token",
+                    "javaPath": self.options.get("java_path", "")
+                }
+
+                # Generate and execute the Minecraft command
+                minecraft_command = minecraft_launcher_lib.command.get_minecraft_command(
+                    version_to_launch, minecraft_directory, options
+                )
+                
+                # Hide launcher if option is enabled
+                if self.options.get("hide_launcher", False):
+                    self.hide()
+                
+                # Launch Minecraft with proper error handling
+                process = subprocess.Popen(
+                    minecraft_command,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                
+                # Wait for the process to complete
+                stdout, stderr = process.communicate()
+                
+                # Show launcher again after game closes
+                if self.options.get("hide_launcher", False):
+                    self.show()
+                    
+                # Check if there were any errors
+                if process.returncode != 0:
+                    error_message = f"Failed to launch Minecraft (Exit code: {process.returncode})"
+                    if stderr:
+                        error_message += f"\n\nError output:\n{stderr}"
+                    QMessageBox.critical(self, "Error", error_message)
+                
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to launch Minecraft: {e}")
+                if self.options.get("hide_launcher", False):
+                    self.show()
 
         def load_options(self):
             default_options = {
@@ -1398,8 +2122,8 @@ else:
 
             if os.path.exists(self.options_file):
                 try:
-                    with open(self.options_file, "r") as file:
-                        return json.load(file)
+                    with open(self.options_file, "rb") as file:
+                        return orjson.loads(file.read())
                 except Exception as e:
                     print(f"Failed to load options: {e}. Using default options.")
                     return default_options
@@ -1409,8 +2133,8 @@ else:
 
         def save_options(self):
             try:
-                with open(self.options_file, "w") as file:
-                    json.dump(self.options, file, indent=4)
+                with open(self.options_file, "wb") as file:
+                    file.write(orjson.dumps(self.options, option=orjson.OPT_INDENT_2))
                 print("Options saved successfully.")
             except Exception as e:
                 print(f"Failed to save options: {e}")
@@ -1421,6 +2145,7 @@ else:
 
             language = self.options.get("language", "English")
             print(f"Applying language: {language}")
+
             hide_launcher = self.options.get("hide_launcher", False)
             print(f"Hide launcher when game is running: {hide_launcher}")
 
