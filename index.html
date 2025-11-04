@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LOOM: Next-Gen Minecraft Launcher</title>
+
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+
+    <style>
+        /* --- 1. Global Styles & Variables --- */
+        :root {
+            --color-white: #FFFFFF;
+            --color-black: #000000;
+            --color-gray-dark: #2d2d2d;
+            --color-gray-light: #888;
+            --color-red: #f00;
+            --color-blue: #00f;
+            --font-mono: "Courier New", monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            cursor: none !important;
+        }
+
+        body {
+            font-family: var(--font-mono);
+            background-color: var(--color-black);
+            color: var(--color-white);
+            image-rendering: pixelated;
+            -ms-interpolation-mode: nearest-neighbor;
+            min-height: 100vh;
+            overflow-x: hidden;
+            cursor: none !important;
+        }
+        
+        .icon {
+            font-family: 'Material Icons';
+            font-weight: normal;
+            font-style: normal;
+            font-size: 24px;
+            display: inline-block;
+            line-height: 1;
+            text-transform: none;
+            letter-spacing: normal;
+            word-wrap: normal;
+            white-space: nowrap;
+            direction: ltr;
+        }
+
+        .glitch-text {
+            font-size: 8rem;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: -0.1em;
+            position: relative;
+            display: inline-block;
+            margin-bottom: 1.5rem;
+            color: var(--color-white);
+        }
+
+        /* --- 3. Background: Star-like Cubes (Only visible on grid) --- */
+        .star-cube-particles {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            overflow: hidden;
+            opacity: 0;
+            transition: opacity 0.5s ease;
+        }
+
+        .star-cube-particles.visible {
+            opacity: 0.3;
+        }
+
+        .star-cube {
+            position: absolute;
+            background-color: var(--color-white);
+            border: 1px solid var(--color-gray-dark);
+            box-shadow: 0 0 5px var(--color-white);
+            animation: pulse-light 4s infinite alternate, drift 20s linear infinite;
+        }
+
+        @keyframes pulse-light {
+            0% { opacity: 0.1; box-shadow: 0 0 0px var(--color-white); }
+            50% { opacity: 0.4; box-shadow: 0 0 10px var(--color-white); }
+            100% { opacity: 0.1; box-shadow: 0 0 0px var(--color-white); }
+        }
+
+        @keyframes drift {
+            0% { transform: translate(0, 0); }
+            100% { transform: translate(var(--drift-x), var(--drift-y)); }
+        }
+
+        /* --- 4. Cube Mouse Follower (3D White Cube with Bevels) --- */
+        #cube-follower {
+            position: fixed;
+            z-index: 999;
+            pointer-events: none;
+            will-change: transform;
+        }
+        
+        .cube-container {
+            width: 48px;
+            height: 48px;
+            position: relative;
+        }
+
+        .cube-simple {
+            width: 100%;
+            height: 100%;
+            background: var(--color-white);
+            border: 3px solid var(--color-black);
+            box-shadow: 0 0 10px rgba(255,255,255,0.3);
+        }
+
+        @keyframes pulse-box-shadow {
+            0%, 100% { box-shadow: 0 0 0px rgba(255,255,255,0); }
+            50% { box-shadow: 0 0 20px rgba(255,255,255,0.5); }
+        }
+        
+        /* --- 5. Layout & Other Components --- */
+        
+        .hero-section {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            text-align: center;
+            padding: 3rem 1rem;
+            z-index: 10;
+        }
+
+        .hero-background-grid {
+            position: absolute;
+            inset: 0;
+            opacity: 0.15;
+            background-image: 
+                repeating-linear-gradient(0deg, var(--color-white) 0px, var(--color-white) 1px, transparent 1px, transparent 20px), 
+                repeating-linear-gradient(90deg, var(--color-white) 0px, var(--color-white) 1px, transparent 1px, transparent 20px);
+            background-size: 20px 20px;
+        }
+
+        .hero-content {
+            position: relative;
+            z-index: 10;
+            max-width: 800px;
+        }
+
+        .hero-subtitle {
+            font-size: 2rem;
+            margin-bottom: 3rem;
+            color: var(--color-gray-light);
+            text-transform: uppercase;
+            letter-spacing: 0.2em;
+        }
+        
+        .hero-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            justify-content: center;
+            align-items: center;
+        }
+        @media (min-width: 640px) {
+            .hero-actions {
+                flex-direction: row;
+            }
+        }
+
+        .pixel-button {
+            padding: 1rem 2rem;
+            font-size: 1rem;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            border: 4px solid var(--color-white);
+            position: relative;
+            overflow: hidden;
+            transition: all 0.2s ease;
+            z-index: 1;
+            appearance: none;
+            background: none;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .pixel-button-primary {
+            background-color: var(--color-white);
+            color: var(--color-black);
+            border-color: var(--color-white);
+        }
+        
+        .pixel-button-secondary {
+            background-color: var(--color-black);
+            color: var(--color-white);
+            border-color: var(--color-white);
+        }
+
+        .pixel-button-shine {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(
+                90deg, 
+                transparent, 
+                rgba(255, 255, 255, 0.4), 
+                transparent
+            );
+            transform: translateX(-100%);
+            transition: transform 0.6s ease;
+            pointer-events: none;
+        }
+        
+        .pixel-button:hover .pixel-button-shine {
+            transform: translateX(100%);
+        }
+        
+        .pixel-button-primary:hover {
+            background-color: var(--color-black);
+            color: var(--color-white);
+            box-shadow: 0 0 20px rgba(255,255,255,0.5);
+        }
+
+        .pixel-button-secondary:hover {
+            background-color: var(--color-white);
+            color: var(--color-black);
+            box-shadow: 0 0 20px rgba(255,255,255,0.5);
+        }
+        
+        /* --- Sections & Footer --- */
+
+        .section {
+            padding: 8rem 1rem;
+            text-align: center;
+            max-width: 1200px;
+            margin: 0 auto;
+            position: relative;
+            z-index: 5;
+        }
+        
+        .section-title {
+            font-size: 3rem;
+            font-weight: 900;
+            text-transform: uppercase;
+            margin-bottom: 0.5rem;
+        }
+        
+        .section-separator {
+            width: 8rem;
+            height: 4px;
+            background-color: var(--color-white);
+            margin: 0 auto 4rem auto;
+        }
+        
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 2rem;
+        }
+
+        .feature-card {
+            border: 4px solid var(--color-white);
+            padding: 2rem;
+            transition: box-shadow 0.3s ease, transform 0.3s ease;
+            background: var(--color-black);
+            position: relative;
+        }
+
+        .feature-card::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background-image: 
+                repeating-linear-gradient(0deg, var(--color-white) 0px, var(--color-white) 1px, transparent 1px, transparent 10px), 
+                repeating-linear-gradient(90deg, var(--color-white) 0px, var(--color-white) 1px, transparent 1px, transparent 10px);
+            background-size: 10px 10px;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none;
+        }
+
+        .feature-card:hover::before {
+            opacity: 0.1;
+        }
+
+        .feature-card:hover {
+            box-shadow: 0 0 30px rgba(255,255,255,0.6);
+            transform: translateY(-8px);
+        }
+
+        .feature-icon {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+            display: inline-block;
+        }
+
+        .footer {
+            border-top: 4px solid var(--color-white);
+            padding: 3rem 1rem;
+            text-align: center;
+            z-index: 5;
+            position: relative;
+        }
+        .footer-bottom {
+            margin-top: 1.5rem;
+            padding-top: 1rem;
+            border-top: 2px solid var(--color-gray-dark);
+            font-size: 0.8rem;
+            color: var(--color-gray-light);
+            text-transform: uppercase;
+            width: 100%;
+        }
+        
+        /* 3D Main Logo Cube */
+        .logo-cube-3d {
+            width: 8rem;
+            height: 8rem;
+            margin: 0 auto;
+            position: relative;
+            transform-style: preserve-3d;
+            perspective: 500px;
+            animation: logo-cube-spin 15s linear infinite;
+            margin-bottom: 2rem;
+        }
+
+        .logo-cube-face {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            background-color: transparent;
+            border: 8px solid var(--color-white);
+            box-shadow: 0 0 30px rgba(255, 255, 255, 0.5), inset 0 0 20px rgba(255, 255, 255, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 5rem;
+            color: var(--color-white);
+            opacity: 0.9;
+            backface-visibility: hidden;
+        }
+
+        .logo-cube-face.front { transform: rotateY(0deg) translateZ(4rem); }
+        .logo-cube-face.back { transform: rotateX(180deg) translateZ(4rem); }
+        .logo-cube-face.right { transform: rotateY(90deg) translateZ(4rem); }
+        .logo-cube-face.left { transform: rotateY(-90deg) translateZ(4rem); }
+        .logo-cube-face.top { transform: rotateX(90deg) translateZ(4rem); }
+        .logo-cube-face.bottom { transform: rotateX(-90deg) translateZ(4rem); }
+
+        @keyframes logo-cube-spin {
+            0% { transform: rotateY(0deg) rotateX(0deg); }
+            100% { transform: rotateY(360deg) rotateX(360deg); }
+        }
+
+    </style>
+</head>
+<body>
+
+    <div class="star-cube-particles" id="star-cube-particles"></div>
+
+    <div id="cube-follower">
+        <div class="cube-container">
+            <div class="cube-simple"></div>
+        </div>
+    </div>
+
+    <section class="hero-section">
+        <div class="hero-background-grid"></div>
+
+        <div class="hero-content">
+            <div class="logo-cube-3d">
+                <div class="logo-cube-face front"><span class="icon">apps</span></div>
+                <div class="logo-cube-face back"><span class="icon">apps</span></div>
+                <div class="logo-cube-face right"><span class="icon">apps</span></div>
+                <div class="logo-cube-face left"><span class="icon">apps</span></div>
+                <div class="logo-cube-face top"><span class="icon">apps</span></div>
+                <div class="logo-cube-face bottom"><span class="icon">apps</span></div>
+            </div>
+
+            <h1 class="glitch-text" id="glitch-text" data-text="LOOM">LOOM</h1>
+
+            <p class="hero-subtitle">Simple Minecraft Launcher</p>
+
+            <div class="hero-actions">
+                <a href="https://github.com/yourusername/loom/releases/latest" class="pixel-button pixel-button-primary">
+                    <span class="pixel-button-shine"></span>
+                    <span class="button-text"><span class="icon">download</span> Download for Windows</span>
+                </a>
+                <a href="https://github.com/yourusername/loom" class="pixel-button pixel-button-secondary">
+                    <span class="pixel-button-shine"></span>
+                    <span class="button-text"><span class="icon">code</span> View on GitHub</span>
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <section class="section">
+        <h2 class="section-title">Features</h2>
+        <div class="section-separator"></div>
+
+        <div class="feature-grid">
+            <div class="feature-card">
+                <span class="icon feature-icon">flash_on</span>
+                <h3>Lightning Fast</h3>
+                <p>Launch Minecraft in seconds with optimized performance.</p>
+            </div>
+            <div class="feature-card">
+                <span class="icon feature-icon">widgets</span>
+                <h3>Mod Support</h3>
+                <p>Seamlessly integrate your favorite mods and packages.</p>
+            </div>
+            <div class="feature-card">
+                <span class="icon feature-icon">layers</span>
+                <h3>Multi-Instance</h3>
+                <p>Manage multiple game instances with different configs.</p>
+            </div>
+            <div class="feature-card">
+                <span class="icon feature-icon">settings</span>
+                <h3>Customizable</h3>
+                <p>Configure Java arguments and resource allocation.</p>
+            </div>
+        </div>
+    </section>
+
+    <footer class="footer">
+        <div class="footer-bottom">
+            Solo Developer Project • Open Source • MIT License
+        </div>
+    </footer>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+
+            // --- Cube Mouse Follower Script (Optimized) ---
+            const cubeFollower = document.getElementById('cube-follower');
+            let mouseX = 0;
+            let mouseY = 0;
+            let currentX = 0;
+            let currentY = 0;
+            const ease = 0.15;
+            const cubeSize = 24;
+
+            function updateFollowerPosition() {
+                const dx = mouseX - currentX - cubeSize;
+                const dy = mouseY - currentY - cubeSize;
+                
+                currentX += dx * ease;
+                currentY += dy * ease;
+                
+                cubeFollower.style.transform = `translate(${currentX}px, ${currentY}px)`;
+                requestAnimationFrame(updateFollowerPosition);
+            }
+
+            document.addEventListener('mousemove', (e) => {
+                mouseX = e.clientX;
+                mouseY = e.clientY;
+            });
+
+            updateFollowerPosition();
+            
+            // --- Star Cube Background Script (Show only on grid areas) ---
+            const starContainer = document.getElementById('star-cube-particles');
+            const NUM_STARS = 400;
+
+            for (let i = 0; i < NUM_STARS; i++) {
+                const star = document.createElement('div');
+                star.className = 'star-cube';
+                
+                const size = Math.random() * 6 + 4;
+                star.style.width = `${size}px`;
+                star.style.height = `${size}px`;
+                star.style.left = `${Math.random() * 100}%`;
+                star.style.top = `${Math.random() * 100}%`;
+                
+                star.style.setProperty('--drift-x', `${Math.random() * 200 - 100}px`); 
+                star.style.setProperty('--drift-y', `${Math.random() * 200 - 100}px`); 
+                star.style.animationDuration = `${Math.random() * 30 + 10}s`;
+                star.style.animationDelay = `${Math.random() * 10}s`;
+
+                starContainer.appendChild(star);
+            }
+
+            // Show stars when hovering over grid areas
+            const gridAreas = document.querySelectorAll('.hero-background-grid, .feature-card');
+            
+            gridAreas.forEach(area => {
+                area.addEventListener('mouseenter', () => {
+                    starContainer.classList.add('visible');
+                });
+            });
+
+            // Keep stars visible when over hero section
+            const heroSection = document.querySelector('.hero-section');
+            heroSection.addEventListener('mouseenter', () => {
+                starContainer.classList.add('visible');
+            });
+            heroSection.addEventListener('mouseleave', () => {
+                starContainer.classList.remove('visible');
+            });
+
+        });
+    </script>
+
+</body>
+</html>
