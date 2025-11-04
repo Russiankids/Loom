@@ -3,12 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LOOM: Next-Gen Minecraft Launcher</title>
+    <title>LOOM</title>
 
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 
     <style>
-        /* --- 1. Global Styles & Variables --- */
         :root {
             --color-white: #FFFFFF;
             --color-black: #000000;
@@ -63,7 +62,6 @@
             color: var(--color-white);
         }
 
-        /* --- 3. Background: Star-like Cubes (Only visible on grid) --- */
         .star-cube-particles {
             position: fixed;
             inset: 0;
@@ -96,7 +94,6 @@
             100% { transform: translate(var(--drift-x), var(--drift-y)); }
         }
 
-        /* --- 4. Cube Mouse Follower (3D White Cube with Bevels) --- */
         #cube-follower {
             position: fixed;
             z-index: 999;
@@ -123,7 +120,6 @@
             50% { box-shadow: 0 0 20px rgba(255,255,255,0.5); }
         }
         
-        /* --- 5. Layout & Other Components --- */
         
         .hero-section {
             min-height: 100vh;
@@ -238,7 +234,6 @@
             box-shadow: 0 0 20px rgba(255,255,255,0.5);
         }
         
-        /* --- Sections & Footer --- */
 
         .section {
             padding: 8rem 1rem;
@@ -322,7 +317,6 @@
             width: 100%;
         }
         
-        /* 3D Main Logo Cube */
         .logo-cube-3d {
             width: 8rem;
             height: 8rem;
@@ -412,7 +406,7 @@
             <div class="feature-card">
                 <span class="icon feature-icon">flash_on</span>
                 <h3>Lightning Fast</h3>
-                <p>Launch Minecraft in seconds with optimized performance.</p>
+                <p>Launch Minecraft in few seconds with optimized performance.</p>
             </div>
             <div class="feature-card">
                 <span class="icon feature-icon">widgets</span>
@@ -441,7 +435,6 @@
     <script>
         document.addEventListener('DOMContentLoaded', () => {
 
-            // --- Cube Mouse Follower Script (Optimized) ---
             const cubeFollower = document.getElementById('cube-follower');
             let mouseX = 0;
             let mouseY = 0;
@@ -468,7 +461,6 @@
 
             updateFollowerPosition();
             
-            // --- Star Cube Background Script (Show only on grid areas) ---
             const starContainer = document.getElementById('star-cube-particles');
             const NUM_STARS = 400;
 
@@ -490,7 +482,6 @@
                 starContainer.appendChild(star);
             }
 
-            // Show stars when hovering over grid areas
             const gridAreas = document.querySelectorAll('.hero-background-grid, .feature-card');
             
             gridAreas.forEach(area => {
@@ -499,7 +490,6 @@
                 });
             });
 
-            // Keep stars visible when over hero section
             const heroSection = document.querySelector('.hero-section');
             heroSection.addEventListener('mouseenter', () => {
                 starContainer.classList.add('visible');
@@ -512,4 +502,5 @@
     </script>
 
 </body>
+
 </html>
